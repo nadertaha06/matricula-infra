@@ -2,3 +2,14 @@
 .claude/
 venv/
 .venv/
+
+# Artefatos locais e notas de implementação
+.Codex/
+docs/superpowers/
+coverage/
+coverage.json
+reports/
+*.pem
+runtime/
+__pycache__/
+.pytest_cache/

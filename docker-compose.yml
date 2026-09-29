@@ -1,49 +1,75 @@
-# Infraestrutura compartilhada dos servicos de matricula.
-# A rede "rede" ja existe na EC2 e por isso e declarada como externa.
-
+name: matricula-infra
 services:
   postgres:
     image: postgres:16
-    # O nome do container e o hostname que os servicos usam em DB_HOST.
-    # Se mudar aqui, tem que mudar nos tres workflows de deploy.
     container_name: postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
-    networks:
-      - rede
+    networks: [rede]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
-      interval: 10s
+      test: [CMD-SHELL, "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
       timeout: 5s
-      retries: 5
-
+      retries: 20
   rabbitmq:
     image: rabbitmq:3-management
     container_name: rabbitmq
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-matricula}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Defina RABBITMQ_PASSWORD}
     ports:
-      - "5672:5672"     # AMQP
-      - "15672:15672"   # painel de administracao
-    networks:
-      - rede
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks: [rede]
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 15s
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
       timeout: 10s
-      retries: 5
-
+      retries: 20
+  matricula-disciplinas:
+    image: nadertaha06/matricula-disciplinas:${DISCIPLINAS_TAG:-latest}
+    build: ../matricula-disciplinas
+    container_name: matricula-disciplinas
+    restart: unless-stopped
+    env_file: ./runtime/disciplinas.env
+    ports: ["8001:8001"]
+    networks: [rede]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+  matricula-solicitacoes:
+    image: nadertaha06/matricula-solicitacoes:${SOLICITACOES_TAG:-latest}
+    build: ../matricula-solicitacoes
+    container_name: matricula-solicitacoes
+    restart: unless-stopped
+    env_file: ./runtime/solicitacoes.env
+    ports: ["8002:8002"]
+    networks: [rede]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+  matricula-processamento:
+    image: nadertaha06/matricula-processamento:${PROCESSAMENTO_TAG:-latest}
+    build: ../matricula-processamento
+    container_name: matricula-processamento
+    restart: unless-stopped
+    env_file: ./runtime/processamento.env
+    ports: ["8003:8003"]
+    networks: [rede]
+    depends_on:
+      postgres: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
 volumes:
   postgres_data:
-
+  rabbitmq_data:
 networks:
   rede:
     external: true
