@@ -18,7 +18,7 @@ def main():
     urls = {s: f'http://{args.host}:{p}' for s,p in [('disciplinas',8001),('solicitacoes',8002),('processamento',8003)]}
 
     if args.base_url:
-        urls = {s: args.base_url.rstrip('/') + '/' + s for s in urls}
+        urls = {s: args.base_url.rstrip('/') + '/api/' + s for s in urls}
 
     def request(service, method, path, data=None, expected=200):
         body = json.dumps(data).encode() if data is not None else None

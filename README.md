@@ -57,9 +57,9 @@ Cada execucao cria registros sinteticos com identificador unico; nao apaga regis
 
 Entrada unica: **http://13.220.42.157:8080/**
 
-- [Disciplinas](http://13.220.42.157:8080/disciplinas/docs)
-- [Solicitacoes](http://13.220.42.157:8080/solicitacoes/docs)
-- [Processamento](http://13.220.42.157:8080/processamento/docs)
+- [Disciplinas](http://13.220.42.157:8080/api/disciplinas/docs)
+- [Solicitacoes](http://13.220.42.157:8080/api/solicitacoes/docs)
+- [Processamento](http://13.220.42.157:8080/api/processamento/docs)
 
 A porta 8080 estava bloqueada no UFW do Ubuntu. Ela foi liberada, e um proxy Nginx encaminha cada prefixo para o servico correspondente na rede Docker. As portas 8001-8003 continuam internas. Nao foi necessario alterar o painel AWS. O container antigo `avaliacao_api` foi parado e seu reinicio automatico desativado.
 
@@ -67,7 +67,7 @@ O proxy e iniciado separadamente para preservar os bancos e containers existente
 
 ```sh
 sudo ufw allow 8080/tcp
-# Configure ROOT_PATH=/disciplinas, /solicitacoes e /processamento
+# Configure ROOT_PATH=/api/disciplinas, /api/solicitacoes e /api/processamento
 # nos respectivos arquivos privados de runtime e reimplante os servicos.
 docker compose -f compose.proxy.yml up -d --wait
 python3 scripts/smoke_e2e.py --base-url http://13.220.42.157:8080
