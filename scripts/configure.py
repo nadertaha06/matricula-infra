@@ -16,7 +16,7 @@ directory = root / 'runtime'
 directory.mkdir(mode=0o700, exist_ok=True)
 for service, port in [('disciplinas', 8001), ('solicitacoes', 8002), ('processamento', 8003)]:
     env = {
-        'APP_NAME': 'matricula-' + service, 'PORT': str(port), 'DB_HOST': 'postgres', 'DB_PORT': '5432',
+        'APP_NAME': 'matricula-' + service, 'ROOT_PATH': '/' + service, 'PORT': str(port), 'DB_HOST': 'postgres', 'DB_PORT': '5432',
         'DB_NAME': service + '_db', 'DB_USER': values.get('POSTGRES_USER', 'postgres'),
         'DB_PASSWORD': values['POSTGRES_PASSWORD'],
         'RABBITMQ_URL': 'amqp://' + quote(values['RABBITMQ_USER'], safe='') + ':' + quote(values['RABBITMQ_PASSWORD'], safe='') + '@rabbitmq:5672/',

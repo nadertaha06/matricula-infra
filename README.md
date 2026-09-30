@@ -53,12 +53,34 @@ Requisitos: Python 3.12 para os servicos, Python 3 para os scripts de demonstrac
 O teste E2E retorna `resultado: PASS` somente apos observar os resultados assincronos esperados.
 Cada execucao cria registros sinteticos com identificador unico; nao apaga registros anteriores.
 
+## Acesso publico
+
+Entrada unica: **http://13.220.42.157:8080/**
+
+- [Disciplinas](http://13.220.42.157:8080/disciplinas/docs)
+- [Solicitacoes](http://13.220.42.157:8080/solicitacoes/docs)
+- [Processamento](http://13.220.42.157:8080/processamento/docs)
+
+A porta 8080 estava bloqueada no UFW do Ubuntu. Ela foi liberada, e um proxy Nginx encaminha cada prefixo para o servico correspondente na rede Docker. As portas 8001-8003 continuam internas. Nao foi necessario alterar o painel AWS. O container antigo `avaliacao_api` foi parado e seu reinicio automatico desativado.
+
+O proxy e iniciado separadamente para preservar os bancos e containers existentes:
+
+```sh
+sudo ufw allow 8080/tcp
+# Configure ROOT_PATH=/disciplinas, /solicitacoes e /processamento
+# nos respectivos arquivos privados de runtime e reimplante os servicos.
+docker compose -f compose.proxy.yml up -d --wait
+python3 scripts/smoke_e2e.py --base-url http://13.220.42.157:8080
+```
+
+Para uma instalacao local nova, `scripts/configure.py` ja gera ROOT_PATH. Suba a aplicacao completa e depois o compose do proxy. Nginx resolve novamente os nomes Docker durante a execucao, acompanhando a troca de IP dos containers em futuros deploys.
+
 ## Demonstracao da entrega
 
 Acesse `/docs` nas portas 8001, 8002 e 8003. Para testar a implantacao publicada:
 
 ```sh
-python3 scripts/smoke_e2e.py --host 13.220.42.157
+python3 scripts/smoke_e2e.py --base-url http://13.220.42.157:8080
 ```
 
 Se o Security Group nao liberar as portas 8001-8003, abra um tunel e use `http://localhost:8001/docs`, `http://localhost:8002/docs` e `http://localhost:8003/docs`:
@@ -159,4 +181,4 @@ A etapa 2 implementa essas responsabilidades e corrige as seguintes divergencias
 
 **Etapa 3:** Auth0, autorizacao, identidade derivada do JWT, tokens M2M e frontend. As APIs atuais sao de demonstracao, com identidade explicita e sem controle de acesso implementado.
 
-**Etapa 4:** API Gateway, testes de carga, Prometheus e Grafana. Cobertura de testes e monitoramento de producao sao atividades diferentes.
+**Etapa 4:** ampliar o proxy de entrada com os requisitos de API Gateway, testes de carga, Prometheus e Grafana. Cobertura de testes e monitoramento de producao sao atividades diferentes.

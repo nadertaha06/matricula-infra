@@ -12,9 +12,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--timeout', type=float, default=45)
+    parser.add_argument('--base-url', help='URL publica do proxy, por exemplo http://13.220.42.157:8080')
     args = parser.parse_args()
     prefix = uuid.uuid4().hex[:8]
     urls = {s: f'http://{args.host}:{p}' for s,p in [('disciplinas',8001),('solicitacoes',8002),('processamento',8003)]}
+
+    if args.base_url:
+        urls = {s: args.base_url.rstrip('/') + '/' + s for s in urls}
 
     def request(service, method, path, data=None, expected=200):
         body = json.dumps(data).encode() if data is not None else None
