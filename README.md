@@ -61,6 +61,24 @@ Acesse `/docs` nas portas 8001, 8002 e 8003. Para testar a implantacao publicada
 python3 scripts/smoke_e2e.py --host 13.220.42.157
 ```
 
+Se o Security Group nao liberar as portas 8001-8003, abra um tunel e use `http://localhost:8001/docs`, `http://localhost:8002/docs` e `http://localhost:8003/docs`:
+
+```sh
+ssh -i ../projsoft26b.pem -N \
+  -L 8001:127.0.0.1:8001 \
+  -L 8002:127.0.0.1:8002 \
+  -L 8003:127.0.0.1:8003 ubuntu@13.220.42.157
+# Em outro terminal:
+python3 scripts/smoke_e2e.py --host 127.0.0.1
+```
+
+Tambem e possivel executar o roteiro diretamente na EC2:
+
+```sh
+ssh -i ../projsoft26b.pem ubuntu@13.220.42.157 \
+  'python3 ~/matricula-infra/scripts/smoke_e2e.py'
+```
+
 O roteiro exercita:
 
 1. Prontidao dos tres bancos e servicos.
