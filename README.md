@@ -164,21 +164,3 @@ Outbox registra eventos na mesma transacao do negocio. Publicacao confirmada, me
 A DLQ exige inspecao e republicacao apos a causa ser corrigida. Uma chamada entre servicos nao participa de uma transacao distribuida: o endpoint de reserva e idempotente por solicitacao para permitir repeticao apos falha. O teste de promotora garante que a falha de um candidato posterior nao desfaz uma promocao ja feita.
 
 O criterio configurado ordena a **lista de espera**, sem redistribuir vagas ja deferidas. Cada promocao e uma transacao separada; `lista.reavaliar` agenda a continuacao. Posicoes sao calculadas no momento da consulta.
-
-## Revisao da etapa 1 e escopo seguinte
-
-A etapa 1 definiu corretamente tres servicos e permitiu usar Python (o enunciado aceita Python ou Java). A estrutura e o deploy existiam, mas os testes cobriam apenas identificacao e health, sem validar persistencia ou matricula.
-
-A etapa 2 implementa essas responsabilidades e corrige as seguintes divergencias:
-
-- O servico chamado `servico-matriculas` no documento corresponde ao repositorio `matricula-solicitacoes`; seu banco efetivo e `solicitacoes_db`.
-- `matricula-infra` e o quarto repositorio, de infraestrutura; nao conta como um quarto servico de negocio.
-- Configuracao da API e conexao do worker tem ciclo de vida por processo; Singleton nao significa uma instancia global entre containers.
-- O processamento e continuo por eventos. A politica por turma esta em `lote`; nao ha redistribuicao global de vagas por lote fechado.
-- A lista de espera e a selecao de avaliacoes com estado `EM_ESPERA`, evitando uma segunda tabela com estado duplicado. Historico academico e horarios usam colunas JSON nos respectivos bancos.
-- `posicao_espera` foi substituida por consulta da posicao atual em `/lista-espera`; `revisao` protege a ordem dos resultados.
-- `matricula.cancelada` e `lista.reavaliar` completam o protocolo de eventos.
-
-**Etapa 3:** Auth0, autorizacao, identidade derivada do JWT, tokens M2M e frontend. As APIs atuais sao de demonstracao, com identidade explicita e sem controle de acesso implementado.
-
-**Etapa 4:** ampliar o proxy de entrada com os requisitos de API Gateway, testes de carga, Prometheus e Grafana. Cobertura de testes e monitoramento de producao sao atividades diferentes.
