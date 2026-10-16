@@ -47,14 +47,17 @@ jobs:
         env:
           DEPLOY_KEY: ${{ secrets.KEY_TEST }}
           DEPLOY_HOST: ${{ secrets.HOST_TEST }}
-          HOST_PUBLIC_KEY: ${{ vars.EC2_HOST_KEY }}
+          # Chave publica do servidor: variavel (padrao dos servicos) ou secret de mesmo nome.
+          HOST_PUBLIC_KEY: ${{ vars.EC2_HOST_KEY || secrets.EC2_HOST_KEY }}
         run: |
           set -eu
           install -m 700 -d ~/.ssh
           printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          test -n "$HOST_PUBLIC_KEY"
-          printf '%s %s\n' "$DEPLOY_HOST" "$HOST_PUBLIC_KEY" > ~/.ssh/known_hosts
+          # Aceita "tipo chave", linha de known_hosts ou chave com comentario.
+          host_key=$(printf '%s\n' "$HOST_PUBLIC_KEY" | grep -oE '(ssh-ed25519|ecdsa-sha2-nistp[0-9]+|ssh-rsa) [A-Za-z0-9+/]+=*' | head -1 || true)
+          test -n "$host_key"
+          printf '%s %s\n' "$DEPLOY_HOST" "$host_key" > ~/.ssh/known_hosts
       - name: Implantar gateway e conferir aplicacao
         env:
           DEPLOY_HOST: ${{ secrets.HOST_TEST }}
