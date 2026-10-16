@@ -157,6 +157,20 @@ Um lock no servidor serializa as atualizacoes para reduzir o uso simultaneo de d
 
 O compose completo e voltado ao primeiro provisionamento/local. Em uma EC2 existente, preserve o volume do PostgreSQL e o volume/nodename do RabbitMQ antes de alterar sua composicao. **Nao execute `down -v` para atualizar a aplicacao.**
 
+### Deploy automatico da infra
+
+[CI infra](https://github.com/nadertaha06/matricula-infra/actions): cada push na `main` testa `scripts/deploy.sh` (deploy e rollback com comandos simulados), valida os arquivos compose e sobe `tls/default.conf` com certificado temporario e servicos simulados (`scripts/test-gateway.sh`), conferindo rotas, redirecionamentos HTTP→HTTPS, desafio ACME e remocao de `X-Service-Token`. Pull requests executam somente essa validacao.
+
+Aprovado o commit, o pipeline executa `scripts/deploy.sh` na EC2 por SSH, com o mesmo lock dos servicos:
+
+1. Religa containers parados da aplicacao (PostgreSQL, RabbitMQ, tres APIs e frontend). Se algum nao existir, para sem alterar nada: ele e criado pelo pipeline do proprio servico.
+2. Atualiza `~/matricula-infra` para o SHA aprovado e valida o Nginx com o certificado real.
+3. Instala as unidades de renovacao do certificado e ativa o timer.
+4. Substitui o proxy HTTP antigo pelo gateway HTTPS e recarrega a configuracao.
+5. Confere portal, `/api/{servico}/ready` dos tres servicos pela 8080 e o desafio ACME em HTTP. Em falha, restaura o commit e os arquivos anteriores; se a 8080 ficar livre, religa o proxy HTTP.
+
+Por fim, o runner acessa `https://IP:8080` de fora, validando o certificado publico, o Security Group e o redirecionamento de HTTP. Usa os mesmos secrets `HOST_TEST` e `KEY_TEST` e a variavel `EC2_HOST_KEY` dos servicos.
+
 ## Confiabilidade
 
 Outbox registra eventos na mesma transacao do negocio. Publicacao confirmada, mensagens persistentes, filas duraveis, inbox por evento e resultados com revisao permitem repeticao segura. Falhas de consumo usam retentativa temporizada; a terceira falha envia a mensagem para `matriculas.dlq`.

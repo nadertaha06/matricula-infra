@@ -1,0 +1,84 @@
+name: Infra CI/CD
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    name: Validar compose, gateway e deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Testar script de deploy e rollback
+        run: |
+          for script in scripts/*.sh; do bash -n "$script"; done
+          python3 -m unittest discover -s tests -v
+      - name: Validar arquivos compose
+        env:
+          POSTGRES_PASSWORD: ci
+          RABBITMQ_PASSWORD: ci
+        run: |
+          mkdir -p runtime
+          touch runtime/disciplinas.env runtime/solicitacoes.env runtime/processamento.env
+          for file in docker-compose.yml compose.https.yml compose.proxy.yml compose.test.yml; do
+            docker compose -f "$file" config -q
+            echo "ok: $file"
+          done
+      - name: Testar gateway HTTPS com certificado temporario
+        run: bash scripts/test-gateway.sh
+
+  deploy:
+    name: Gateway na EC2
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Preparar SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.KEY_TEST }}
+          DEPLOY_HOST: ${{ secrets.HOST_TEST }}
+          HOST_PUBLIC_KEY: ${{ vars.EC2_HOST_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          test -n "$HOST_PUBLIC_KEY"
+          printf '%s %s\n' "$DEPLOY_HOST" "$HOST_PUBLIC_KEY" > ~/.ssh/known_hosts
+      - name: Implantar gateway e conferir aplicacao
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST_TEST }}
+        run: |
+          set -eu
+          ssh -i ~/.ssh/deploy_key "ubuntu@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" < scripts/deploy.sh
+      - name: Verificar acesso publico HTTPS
+        env:
+          DEPLOY_HOST: ${{ secrets.HOST_TEST }}
+        run: |
+          set -eu
+          base="https://$DEPLOY_HOST:8080"
+          # Sem -k: confere tambem o certificado publico do IP.
+          for path in /health /api/disciplinas/ready /api/solicitacoes/ready /api/processamento/ready; do
+            curl -fsS --retry 5 --retry-all-errors --max-time 10 "$base$path" >/dev/null
+            echo "ok: $path"
+          done
+          curl -fsS --max-time 10 "$base/" | grep -q 'id="root"'
+          echo "ok: portal"
+          redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 "http://$DEPLOY_HOST:8080/health")
+          test "$redirect" = "308 $base/health"
+          echo "ok: HTTP redireciona para HTTPS"
+          {
+            echo "### Acesso publico"
+            echo "Portal: $base/"
+            echo "Certificado: $(echo | openssl s_client -connect "$DEPLOY_HOST:8080" 2>/dev/null | openssl x509 -noout -enddate)"
+          } >> "$GITHUB_STEP_SUMMARY"
