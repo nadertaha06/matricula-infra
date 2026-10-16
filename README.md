@@ -183,3 +183,28 @@ DB_PORT=55432 RABBITMQ_URL=amqp://tests:tests@localhost:55672/etapa2-tests bash 
 ```
 
 Antes de atualizar uma EC2 existente, configure AUTH0_DOMAIN, AUTH0_AUDIENCE e um único INTERNAL_API_TOKEN nos três arquivos privados de runtime. Faça a implantação coordenada para que o processamento não chame APIs protegidas sem a credencial. Publique o frontend e configure HTTPS e URLs permitidas do Auth0. Nenhuma alteração remota é feita pelo setup local.
+
+## HTTPS direto pelo IP publico
+
+`compose.https.yml` adiciona um gateway nas portas 80/443, preservando o gateway anterior da porta 8080. O gateway HTTPS encaminha o portal e suas chamadas de API para `matricula-frontend:80` na rede `rede`. Não publica as portas internas dos serviços.
+
+A EC2 utiliza Certbot 5.4 ou superior em `/opt/matricula-certbot`, com certificado de IP emitido pela Let's Encrypt no perfil `shortlived`. As chaves ficam exclusivamente em `/etc/letsencrypt`, fora do Git. O certificado tem o nome local `matricula-publico`, independentemente do endereço.
+
+Para provisionar em outra máquina, libere TCP 80/443 no firewall e no Security Group. Primeiro sirva `/.well-known/acme-challenge/` a partir de `/var/www/matricula-acme` na porta 80, sem habilitar o bloco TLS antes de o certificado existir. Emita o certificado com:
+
+```sh
+sudo /opt/matricula-certbot/bin/certbot certonly \
+  --preferred-profile shortlived --webroot \
+  --webroot-path /var/www/matricula-acme \
+  --ip-address "$PUBLIC_IP" --cert-name matricula-publico
+```
+
+Depois aplique `tls/default.conf`, valide com `docker exec matricula-https nginx -t` e recarregue o Nginx. O compose monta o diretório de certificados somente para leitura. As unidades `tls/matricula-certbot.service` e `tls/matricula-certbot.timer`, instaladas em `/etc/systemd/system/`, verificam a renovação a cada seis horas e recarregam o gateway quando necessário. O timer deve permanecer ativo: certificados de IP duram seis dias.
+
+```sh
+sudo systemctl enable --now matricula-certbot.timer
+sudo systemctl list-timers matricula-certbot.timer
+sudo /opt/matricula-certbot/bin/certbot renew --dry-run
+```
+
+Na SPA Auth0, acrescente a origem `https://IP_PUBLICO` a **Allowed Callback URLs**, **Allowed Logout URLs** e **Allowed Web Origins**, preservando as entradas locais. O navegador acessa o IP diretamente, sem túnel e sem depender de processos no computador do usuário. Se o IP da EC2 mudar, reemita o certificado para o novo endereço e atualize as URLs permitidas no Auth0.

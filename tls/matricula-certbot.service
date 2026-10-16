@@ -1,0 +1,8 @@
+[Unit]
+Description=Renovar certificado HTTPS do portal de matricula
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/matricula-certbot/bin/certbot renew --quiet --deploy-hook "/usr/bin/docker exec matricula-https nginx -s reload"

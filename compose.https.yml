@@ -1,0 +1,20 @@
+name: matricula-https
+services:
+  https:
+    image: nginx:1.28-alpine
+    container_name: matricula-https
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./tls:/etc/nginx/conf.d:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/matricula-acme:/var/www/acme:ro
+    networks: [rede]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+networks:
+  rede:
+    external: true
