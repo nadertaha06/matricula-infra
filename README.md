@@ -55,22 +55,22 @@ Cada execucao cria registros sinteticos com identificador unico; nao apaga regis
 
 ## Acesso publico
 
-Entrada unica: **http://13.220.42.157:8080/**
+Entrada unica: **https://13.220.42.157:8080/** (portal com login Auth0)
 
-- [Disciplinas](http://13.220.42.157:8080/api/disciplinas/docs)
-- [Solicitacoes](http://13.220.42.157:8080/api/solicitacoes/docs)
-- [Processamento](http://13.220.42.157:8080/api/processamento/docs)
+- [Disciplinas](https://13.220.42.157:8080/api/disciplinas/docs)
+- [Solicitacoes](https://13.220.42.157:8080/api/solicitacoes/docs)
+- [Processamento](https://13.220.42.157:8080/api/processamento/docs)
 
-A porta 8080 estava bloqueada no UFW do Ubuntu. Ela foi liberada, e um proxy Nginx encaminha cada prefixo para o servico correspondente na rede Docker. As portas 8001-8003 continuam internas. Nao foi necessario alterar o painel AWS. O container antigo `avaliacao_api` foi parado e seu reinicio automatico desativado.
+Links antigos `http://13.220.42.157:8080/...` e `http://13.220.42.157/...` sao redirecionados para HTTPS. O gateway HTTPS (`compose.https.yml`, secao abaixo) encaminha a raiz para o portal e cada prefixo `/api/{servico}` para o servico correspondente na rede Docker. As portas 8001-8003 continuam internas. O container antigo `avaliacao_api` foi parado e seu reinicio automatico desativado.
 
-O proxy e iniciado separadamente para preservar os bancos e containers existentes:
+O proxy HTTP original (`compose.proxy.yml`) continua disponivel para ambientes sem certificado. Ele tambem usa a porta 8080, portanto execute apenas um dos dois:
 
 ```sh
 sudo ufw allow 8080/tcp
 # Configure ROOT_PATH=/api/disciplinas, /api/solicitacoes e /api/processamento
 # nos respectivos arquivos privados de runtime e reimplante os servicos.
 docker compose -f compose.proxy.yml up -d --wait
-python3 scripts/smoke_e2e.py --base-url http://13.220.42.157:8080
+python3 scripts/smoke_e2e.py --base-url http://IP_PUBLICO:8080
 ```
 
 Para uma instalacao local nova, `scripts/configure.py` ja gera ROOT_PATH. Suba a aplicacao completa e depois o compose do proxy. Nginx resolve novamente os nomes Docker durante a execucao, acompanhando a troca de IP dos containers em futuros deploys.
@@ -80,7 +80,7 @@ Para uma instalacao local nova, `scripts/configure.py` ja gera ROOT_PATH. Suba a
 Acesse `/docs` nas portas 8001, 8002 e 8003. Para testar a implantacao publicada:
 
 ```sh
-python3 scripts/smoke_e2e.py --base-url http://13.220.42.157:8080
+python3 scripts/smoke_e2e.py --base-url https://13.220.42.157:8080
 ```
 
 Se o Security Group nao liberar as portas 8001-8003, abra um tunel e use `http://localhost:8001/docs`, `http://localhost:8002/docs` e `http://localhost:8003/docs`:
@@ -186,7 +186,12 @@ Antes de atualizar uma EC2 existente, configure AUTH0_DOMAIN, AUTH0_AUDIENCE e u
 
 ## HTTPS direto pelo IP publico
 
-`compose.https.yml` adiciona um gateway nas portas 80/443, preservando o gateway anterior da porta 8080. O gateway HTTPS encaminha o portal e suas chamadas de API para `matricula-frontend:80` na rede `rede`. Não publica as portas internas dos serviços.
+`compose.https.yml` publica um gateway Nginx nas portas 80, 443 e 8080 e substitui o proxy HTTP da porta 8080 (pare `compose.proxy.yml` antes de iniciá-lo). A 8080 é a entrada pública em HTTPS porque o Security Group da EC2 libera 80 e 8080, mas não 443; a 443 fica configurada para quando a porta for liberada. A porta 80 permanece em HTTP somente para o desafio ACME da renovação e redireciona o restante para `https://IP:8080`. Requisições HTTP simples enviadas à 8080 recebem `308` para HTTPS (código 497 do Nginx), preservando método e corpo. O gateway encaminha a raiz para `matricula-frontend:80` e `/api/{servico}` para cada serviço na rede `rede`, removendo `X-Service-Token`. Não publica as portas internas dos serviços.
+
+```sh
+docker compose -f compose.proxy.yml down
+docker compose -f compose.https.yml up -d --wait
+```
 
 A EC2 utiliza Certbot 5.4 ou superior em `/opt/matricula-certbot`, com certificado de IP emitido pela Let's Encrypt no perfil `shortlived`. As chaves ficam exclusivamente em `/etc/letsencrypt`, fora do Git. O certificado tem o nome local `matricula-publico`, independentemente do endereço.
 
@@ -207,4 +212,4 @@ sudo systemctl list-timers matricula-certbot.timer
 sudo /opt/matricula-certbot/bin/certbot renew --dry-run
 ```
 
-Na SPA Auth0, acrescente a origem `https://IP_PUBLICO` a **Allowed Callback URLs**, **Allowed Logout URLs** e **Allowed Web Origins**, preservando as entradas locais. O navegador acessa o IP diretamente, sem túnel e sem depender de processos no computador do usuário. Se o IP da EC2 mudar, reemita o certificado para o novo endereço e atualize as URLs permitidas no Auth0.
+Na SPA Auth0, acrescente as origens `https://IP_PUBLICO:8080` e `https://IP_PUBLICO` a **Allowed Callback URLs**, **Allowed Logout URLs** e **Allowed Web Origins**, preservando as entradas locais. A porta faz parte da origem: sem `:8080` cadastrado, o Auth0 recusa o login com "Callback URL mismatch". O navegador acessa o IP diretamente, sem túnel e sem depender de processos no computador do usuário. Se o IP da EC2 mudar, reemita o certificado para o novo endereço e atualize as URLs permitidas no Auth0.
