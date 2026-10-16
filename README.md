@@ -1,6 +1,6 @@
 # Sistema de matricula em disciplinas
 
-Infraestrutura e demonstracao integrada da **etapa 2** de Projeto de Software.
+Infraestrutura do sistema de matrícula. Inclui a base da etapa 2 e a integração local Auth0/frontend da etapa 3.
 A aplicacao usa tres servicos Python/FastAPI com PostgreSQL, comunicacao HTTP e RabbitMQ.
 
 | Repositorio | Responsabilidade | Porta | Banco |
@@ -164,3 +164,22 @@ Outbox registra eventos na mesma transacao do negocio. Publicacao confirmada, me
 A DLQ exige inspecao e republicacao apos a causa ser corrigida. Uma chamada entre servicos nao participa de uma transacao distribuida: o endpoint de reserva e idempotente por solicitacao para permitir repeticao apos falha. O teste de promotora garante que a falha de um candidato posterior nao desfaz uma promocao ja feita.
 
 O criterio configurado ordena a **lista de espera**, sem redistribuir vagas ja deferidas. Cada promocao e uma transacao separada; `lista.reavaliar` agenda a continuacao. Posicoes sao calculadas no momento da consulta.
+
+## Etapa 3: Auth0 e frontend
+
+Clone também `matricula-frontend` como diretório irmão. Preencha `.env` usando `.env.example`, execute `python3 scripts/configure.py` e inicie `docker compose up -d --build --wait`. O portal fica em http://localhost:5173. As portas das APIs estão vinculadas ao loopback; acesso externo deve passar pelo gateway.
+
+O script gera um segredo interno em `runtime/.internal-token`, preservado entre execuções e com modo 600, e o replica nos arquivos privados dos três serviços. Não envie esse arquivo ao GitHub nem ao frontend. A credencial permite somente acesso interno limitado; não concede permissões administrativas.
+
+Configure no Auth0 a SPA com callback/logout/web origin `http://localhost:5173`, a API `https://matricula-api`, RBAC e inclusão de permissions. O README do frontend lista os quatro scopes administrativos. Os dados de Domain/Client ID/Audience são públicos; senhas PostgreSQL/RabbitMQ e token interno ficam nos arquivos privados. Não é necessário Client Secret para a SPA.
+
+O script `smoke_e2e.py` agora exige `MATRICULA_ADMIN_TOKEN` no ambiente com um access token Auth0 de administrador. Nunca coloque tokens em commits, argumentos públicos de linha de comando ou logs. Sem um token real, o smoke não valida login com o tenant; os testes automatizados validam JWTs RSA de teste e as regras de autorização.
+
+Para testes locais com portas alternativas:
+
+```sh
+TEST_POSTGRES_PORT=55432 TEST_RABBITMQ_PORT=55672 docker compose -f compose.test.yml up -d --wait
+DB_PORT=55432 RABBITMQ_URL=amqp://tests:tests@localhost:55672/etapa2-tests bash scripts/test-all.sh
+```
+
+Antes de atualizar uma EC2 existente, configure AUTH0_DOMAIN, AUTH0_AUDIENCE e um único INTERNAL_API_TOKEN nos três arquivos privados de runtime. Faça a implantação coordenada para que o processamento não chame APIs protegidas sem a credencial. Publique o frontend e configure HTTPS e URLs permitidas do Auth0. Nenhuma alteração remota é feita pelo setup local.

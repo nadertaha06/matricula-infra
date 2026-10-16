@@ -40,7 +40,7 @@ services:
     container_name: matricula-disciplinas
     restart: unless-stopped
     env_file: ./runtime/disciplinas.env
-    ports: ["8001:8001"]
+    ports: ["127.0.0.1:8001:8001"]
     networks: [rede]
     depends_on:
       postgres: {condition: service_healthy}
@@ -51,7 +51,7 @@ services:
     container_name: matricula-solicitacoes
     restart: unless-stopped
     env_file: ./runtime/solicitacoes.env
-    ports: ["8002:8002"]
+    ports: ["127.0.0.1:8002:8002"]
     networks: [rede]
     depends_on:
       postgres: {condition: service_healthy}
@@ -62,11 +62,23 @@ services:
     container_name: matricula-processamento
     restart: unless-stopped
     env_file: ./runtime/processamento.env
-    ports: ["8003:8003"]
+    ports: ["127.0.0.1:8003:8003"]
     networks: [rede]
     depends_on:
       postgres: {condition: service_healthy}
       rabbitmq: {condition: service_healthy}
+  frontend:
+    build:
+      context: ../matricula-frontend
+      args:
+        VITE_AUTH0_DOMAIN: ${AUTH0_DOMAIN:-dev-ye1ln8pnfhd2hxus.us.auth0.com}
+        VITE_AUTH0_CLIENT_ID: ${AUTH0_CLIENT_ID:-6JJxQTtn3Z4svk1JNuGLfa0bSGl9cja8}
+        VITE_AUTH0_AUDIENCE: ${AUTH0_AUDIENCE:-https://matricula-api}
+    container_name: matricula-frontend
+    restart: unless-stopped
+    ports: ["127.0.0.1:5173:80"]
+    networks: [rede]
+    depends_on: [matricula-disciplinas, matricula-solicitacoes, matricula-processamento]
 volumes:
   postgres_data:
   rabbitmq_data:

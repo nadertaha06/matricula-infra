@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real three-service/RabbitMQ flow using only synthetic data."""
 import argparse
+import os
 import json
 import time
 import uuid
@@ -14,6 +15,9 @@ def main():
     parser.add_argument('--timeout', type=float, default=45)
     parser.add_argument('--base-url', help='URL publica do proxy, por exemplo http://13.220.42.157:8080')
     args = parser.parse_args()
+    token = os.environ.get('MATRICULA_ADMIN_TOKEN')
+    if not token:
+        parser.error('Defina MATRICULA_ADMIN_TOKEN com um access token Auth0 administrativo; nao use ID token.')
     prefix = uuid.uuid4().hex[:8]
     urls = {s: f'http://{args.host}:{p}' for s,p in [('disciplinas',8001),('solicitacoes',8002),('processamento',8003)]}
 
@@ -22,7 +26,7 @@ def main():
 
     def request(service, method, path, data=None, expected=200):
         body = json.dumps(data).encode() if data is not None else None
-        req = urllib.request.Request(urls[service]+path, data=body, method=method, headers={'Content-Type':'application/json'})
+        req = urllib.request.Request(urls[service]+path, data=body, method=method, headers={'Content-Type':'application/json', 'Authorization':'Bearer '+token})
         try:
             with urllib.request.urlopen(req, timeout=10) as response:
                 status, raw = response.status, response.read()

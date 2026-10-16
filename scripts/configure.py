@@ -1,5 +1,6 @@
 """Generate private local runtime files from this deployment's .env."""
 import os
+import secrets
 from pathlib import Path
 from urllib.parse import quote
 
@@ -12,10 +13,27 @@ for line in (root / '.env').read_text().splitlines():
 required = ['POSTGRES_PASSWORD', 'RABBITMQ_USER', 'RABBITMQ_PASSWORD']
 if any(not values.get(k) for k in required):
     raise SystemExit('Preencha POSTGRES_PASSWORD, RABBITMQ_USER e RABBITMQ_PASSWORD no .env')
+# Persist a single private credential so reruns do not invalidate running workers.
+secret_path = root / 'runtime' / '.internal-token'
+secret_path.parent.mkdir(mode=0o700, exist_ok=True)
+if values.get('INTERNAL_API_TOKEN'):
+    internal_token = values['INTERNAL_API_TOKEN']
+elif secret_path.exists():
+    internal_token = secret_path.read_text().strip()
+else:
+    internal_token = secrets.token_urlsafe(32)
+if len(internal_token) < 32:
+    raise SystemExit('INTERNAL_API_TOKEN deve ter ao menos 32 caracteres')
+secret_path.touch(mode=0o600, exist_ok=True)
+secret_path.chmod(0o600)
+secret_path.write_text(internal_token)
 directory = root / 'runtime'
 directory.mkdir(mode=0o700, exist_ok=True)
 for service, port in [('disciplinas', 8001), ('solicitacoes', 8002), ('processamento', 8003)]:
     env = {
+        'AUTH0_DOMAIN': values.get('AUTH0_DOMAIN', 'dev-ye1ln8pnfhd2hxus.us.auth0.com'),
+        'AUTH0_AUDIENCE': values.get('AUTH0_AUDIENCE', 'https://matricula-api'),
+        'INTERNAL_API_TOKEN': internal_token,
         'APP_NAME': 'matricula-' + service, 'ROOT_PATH': '/api/' + service, 'PORT': str(port), 'DB_HOST': 'postgres', 'DB_PORT': '5432',
         'DB_NAME': service + '_db', 'DB_USER': values.get('POSTGRES_USER', 'postgres'),
         'DB_PASSWORD': values['POSTGRES_PASSWORD'],
