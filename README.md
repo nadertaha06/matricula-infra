@@ -1,21 +1,34 @@
 # Sistema de matricula em disciplinas
 
-Infraestrutura do sistema de matrícula. Inclui a base da etapa 2 e a integração local Auth0/frontend da etapa 3.
-A aplicacao usa tres servicos Python/FastAPI com PostgreSQL, comunicacao HTTP e RabbitMQ.
+Infraestrutura do sistema de matrícula: API Gateway HTTPS, Prometheus, Grafana, teste de carga e deploy automático.
+A aplicacao usa tres servicos Python/FastAPI com PostgreSQL, comunicacao HTTP e RabbitMQ, e um portal React com login Auth0.
+
+**Portal:** https://13.220.42.157:8080/ · **Grafana:** https://13.220.42.157:8080/grafana/ (leitura sem login)
 
 | Repositorio | Responsabilidade | Porta | Banco |
 |---|---|---:|---|
 | [matricula-disciplinas](https://github.com/nadertaha06/matricula-disciplinas) | Oferta, horarios e reservas de vagas | 8001 | disciplinas_db |
 | [matricula-solicitacoes](https://github.com/nadertaha06/matricula-solicitacoes) | Solicitacoes, historico e estados | 8002 | solicitacoes_db |
 | [matricula-processamento](https://github.com/nadertaha06/matricula-processamento) | Regras e lista de espera | 8003 | processamento_db |
+| [matricula-frontend](https://github.com/nadertaha06/matricula-frontend) | Portal React com Auth0 | 80 (interno) | — |
 
 ## Arquitetura implementada
 
 ```mermaid
 flowchart LR
-    U[Cliente ou Swagger] --> D[Disciplinas :8001]
-    U --> S[Solicitacoes :8002]
-    U --> P[Processamento :8003]
+    U[Navegador] -->|HTTPS :8080| G[API Gateway Nginx]
+    U -->|login OAuth2 + PKCE| A[Auth0]
+    G --> F[Portal React]
+    G -->|/api/disciplinas| D[Disciplinas :8001]
+    G -->|/api/solicitacoes| S[Solicitacoes :8002]
+    G -->|/api/processamento| P[Processamento :8003]
+    G -->|/grafana| GR[Grafana]
+    GR --> PR[Prometheus]
+    PR -. coleta /metrics .-> D
+    PR -. coleta .-> S
+    PR -. coleta .-> P
+    PR -. coleta .-> G
+    PR -. coleta .-> R
     D --> DB1[(disciplinas_db)]
     S --> DB2[(solicitacoes_db)]
     P --> DB3[(processamento_db)]
@@ -170,6 +183,53 @@ Aprovado o commit, o pipeline executa `scripts/deploy.sh` na EC2 por SSH, com o 
 5. Confere portal, `/api/{servico}/ready` dos tres servicos pela 8080 e o desafio ACME em HTTP. Em falha, restaura o commit e os arquivos anteriores; se a 8080 ficar livre, religa o proxy HTTP.
 
 Por fim, o runner acessa `https://IP:8080` de fora, validando o certificado publico, o Security Group e o redirecionamento de HTTP. Usa os mesmos secrets `HOST_TEST` e `KEY_TEST` e a variavel `EC2_HOST_KEY` dos servicos.
+
+## Etapa 4: API Gateway, monitoramento e teste de carga
+
+### API Gateway
+
+`tls/default.conf` (container `matricula-https`) e a unica entrada publica. Alem de TLS e do roteamento por prefixo, ele:
+
+| Responsabilidade | Implementacao |
+|---|---|
+| Limite de taxa por cliente | `limit_req` de 50 req/s por IP em `/api/` (rajada de 100) e 20 req/s no Grafana; o excesso recebe **429** sem chegar aos servicos |
+| Correlacao | gera `X-Request-ID`, repassa aos servicos e devolve ao cliente |
+| Credenciais internas | remove `X-Service-Token` de toda requisicao externa (lista unica em `tls/proxy-headers.inc`) |
+| Metricas internas | `/api/{servico}/metrics` responde 404 por fora; o Prometheus coleta pela rede Docker |
+| Observabilidade | log de acesso em JSON com tempo total e tempo do servico; `stub_status` na porta interna 8081 |
+| Desempenho | gzip para o bundle do portal (JS/CSS/SVG); respostas JSON da API ficam sem compressao |
+| Compatibilidade | HTTP simples na 8080 e na 80 vira HTTPS (308); prefixos antigos redirecionam para `/api` |
+
+`scripts/test-gateway.sh` sobe essa configuracao com certificado temporario e servicos simulados e confere cada item acima (inclusive uma rajada de 400 requisicoes que precisa receber 429). Roda no CI a cada push.
+
+### Monitoramento (Prometheus e Grafana)
+
+`compose.monitoring.yml` sobe Prometheus, Grafana e exporters na rede `rede`. So o Grafana e publico, pelo gateway em `/grafana/`, com leitura anonima (papel Viewer); a senha do admin e gerada pelo deploy em `~/.config/matricula/grafana.env` na EC2, fora do Git. O Prometheus fica no loopback da EC2 (`ssh -L 9090:127.0.0.1:9090 ubuntu@13.220.42.157`).
+
+| Alvo (`job`) | Origem das metricas |
+|---|---|
+| disciplinas, solicitacoes, processamento | `GET /metrics` de cada servico (prometheus-client): HTTP, mensageria e negocio |
+| gateway | nginx-prometheus-exporter lendo `stub_status` |
+| rabbitmq | plugin `rabbitmq_prometheus` (`/metrics/per-object`, profundidade por fila) |
+| postgres | postgres-exporter (conexoes e transacoes por banco) |
+| node | node-exporter (CPU, memoria e disco da EC2) |
+
+Painel provisionado: `monitoring/grafana/dashboards/matricula.json` (37 paineis em 8 secoes: visao geral, API, gateway, RabbitMQ, negocio, comunicacao sincrona, infraestrutura e alvos/alertas). Regras de alerta em `monitoring/prometheus/alertas.yml`: alvo fora do ar, 5xx acima de 5%, p95 acima de 1 s, mensagens na DLQ, fila acumulando, worker desconectado, disco e memoria baixos. O CI valida a configuracao e as regras com `promtool` e confere o JSON do painel.
+
+### Teste de carga (Locust)
+
+`loadtest/locustfile.py` exercita o sistema pelo gateway publico com tres perfis simultaneos: alunos navegando (leituras autenticadas), periodo de matricula (solicitacoes que passam por outbox, RabbitMQ, avaliacao, chamadas HTTP entre servicos e reserva de vaga) e visitantes (portal, `/ready` e API protegida sem token, que deve responder 401). Estagios: 10, 40, 90 e 10 usuarios ao longo de 7 minutos.
+
+Com token de administrador, cria uma turma sintetica de capacidade limitada e solicita vagas em nome de alunos ficticios; ao final confere que o numero de deferidas e igual as vagas ocupadas e nunca passa da capacidade. Com token de aluno, solicita para a propria conta uma turma com pre-requisito (no maximo 40 vezes).
+
+```sh
+python3 -m venv .venv-carga && .venv-carga/bin/pip install -r loadtest/requirements.txt
+# Access token Auth0 do usuario (nunca versione): salve em um arquivo com permissao 600.
+cd loadtest && MATRICULA_TOKEN_FILE=~/token.txt ../.venv-carga/bin/locust -f locustfile.py \
+  --host https://13.220.42.157:8080 --headless --html resultados/relatorio.html --csv resultados/carga
+```
+
+`CARGA_PERFIL=curto` roda em 1 minuto; sem token, so o perfil de visitante e executado. Os resultados ficam em `loadtest/resultados/` (ignorado pelo Git).
 
 ## Confiabilidade
 

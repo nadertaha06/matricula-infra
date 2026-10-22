@@ -2,12 +2,15 @@
 
 Tres perfis de usuario disputam o sistema ao mesmo tempo:
 - AlunoNavegando: catalogo, turmas, minhas matriculas e sessao (leituras autenticadas);
-- PeriodoDeMatricula: alunos ficticios solicitando vaga numa turma sintetica de capacidade
-  limitada, exercitando HTTP -> outbox -> RabbitMQ -> avaliacao -> reserva -> resultado;
+- PeriodoDeMatricula: solicitacoes que percorrem HTTP -> outbox -> RabbitMQ -> avaliacao
+  (com chamadas HTTP entre servicos) -> resultado;
 - Visitante: portal, arquivos estaticos, /ready dos servicos e API protegida sem token (401).
 
-Ao final, confere que a turma sintetica nao recebeu mais deferimentos que a capacidade.
-O token e um access token Auth0 de usuario com papel administrador; nunca o versione.
+O modo depende das permissoes do access token Auth0 (nunca o versione):
+- administrador: cria uma turma sintetica de capacidade limitada e solicita vagas em nome de
+  alunos ficticios; ao final confere que nao houve mais deferimentos que vagas (overbooking);
+- aluno: solicita, para a propria conta, uma turma com pre-requisito que ela nao cumpre
+  (no maximo CARGA_MAX_SOLICITACOES vezes); cada pedido novo e avaliado e indeferido.
 """
 import json
 import os
@@ -23,13 +26,13 @@ from locust import HttpUser, LoadTestShape, between, events, task
 
 RUN = os.environ.get("CARGA_ID") or time.strftime("%m%d%H%M")
 CAPACIDADE = int(os.environ.get("CARGA_CAPACIDADE", "100"))
-MAX_SOLICITACOES = int(os.environ.get("CARGA_MAX_SOLICITACOES", "300"))
+_max = os.environ.get("CARGA_MAX_SOLICITACOES")
 RESUMO = Path(os.environ.get("CARGA_RESUMO", f"resultados/resumo-{RUN}.json"))
 _token_file = os.environ.get("MATRICULA_TOKEN_FILE")
 TOKEN = os.environ.get("MATRICULA_TOKEN") or (
     Path(_token_file).expanduser().read_text().strip() if _token_file else "")
 AUTH = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
-estado = {"turma_id": None, "solicitacoes": []}
+estado = {"turma_id": None, "solicitacoes": [], "modo": None, "maximo": 0}
 
 # Estagios: aquecimento, carga nominal, pico e recuperacao (segundos acumulados, usuarios).
 ESTAGIOS = {
@@ -48,11 +51,30 @@ def verificar(resposta, *esperados):
 
 
 @events.test_start.add_listener
-def preparar_turma(environment, **_):
-    """Cria disciplina e turma sinteticas, identificadas pelo RUN, para a disputa de vagas."""
+def preparar(environment, **_):
     if not TOKEN:
         return
     base = environment.host.rstrip("/")
+    sessao = requests.get(f"{base}/api/solicitacoes/session", headers=AUTH, timeout=15)
+    sessao.raise_for_status()
+    permissoes = set(sessao.json()["permissions"])
+    if {"manage:oferta", "manage:matriculas"} <= permissoes:
+        estado["modo"] = "administrador"
+        estado["maximo"] = int(_max or 300)
+        preparar_turma_sintetica(base)
+    else:
+        estado["modo"] = "aluno"
+        estado["maximo"] = int(_max or 40)
+        turmas = requests.get(f"{base}/api/disciplinas/turmas", headers=AUTH, timeout=15).json()
+        alvo = next((t for t in turmas if t["pre_requisitos"]), None)
+        if alvo is None:
+            raise RuntimeError("Nenhuma turma com pre-requisito para o modo aluno")
+        estado["turma_id"] = alvo["id"]
+        print(f"Modo aluno: solicitacoes para a turma {alvo['id']} ({alvo['disciplina_codigo']})")
+
+
+def preparar_turma_sintetica(base):
+    """Cria disciplina e turma sinteticas, identificadas pelo RUN, para a disputa de vagas."""
     codigo = f"CARGA{RUN}"
     r = requests.post(f"{base}/api/disciplinas/disciplinas", headers=AUTH, timeout=15,
                       json={"codigo": codigo, "nome": f"Teste de carga {RUN}", "pre_requisitos": []})
@@ -99,13 +121,16 @@ class PeriodoDeMatricula(HttpUser):
 
     @task(3)
     def solicitar_vaga(self):
-        if not estado["turma_id"] or len(estado["solicitacoes"]) >= MAX_SOLICITACOES:
+        if not estado["turma_id"] or len(estado["solicitacoes"]) >= estado["maximo"]:
             return self.acompanhar()
-        aluno = f"carga-{RUN}-{uuid.uuid4().hex[:10]}"
+        corpo = {"turma_id": estado["turma_id"]}
+        if estado["modo"] == "administrador":
+            corpo["aluno_id"] = f"carga-{RUN}-{uuid.uuid4().hex[:10]}"
         with self.client.post("/api/solicitacoes/matriculas", headers=AUTH, catch_response=True,
-                              json={"aluno_id": aluno, "turma_id": estado["turma_id"]}) as r:
+                              json=corpo) as r:
             verificar(r, 202)
-            if r.status_code == 202:
+            # No modo aluno, enquanto a anterior aguarda avaliacao o mesmo id volta (idempotencia).
+            if r.status_code == 202 and r.json()["id"] not in estado["solicitacoes"]:
                 estado["solicitacoes"].append(r.json()["id"])
 
     @task(2)
@@ -163,15 +188,18 @@ class PeriodoDeCarga(LoadTestShape):
 
 @events.test_stop.add_listener
 def conferir_vagas(environment, **_):
-    """Espera o processamento assincrono e confere deferidas x capacidade (sem overbooking)."""
+    """Espera o processamento assincrono e confere o estado final das solicitacoes do teste."""
     if not TOKEN or not estado["turma_id"]:
         return
     base = environment.host.rstrip("/")
     turma_id = estado["turma_id"]
+    criadas = set(estado["solicitacoes"])
+    lista_url = (f"{base}/api/solicitacoes/matriculas" if estado["modo"] == "administrador"
+                 else f"{base}/api/solicitacoes/matriculas/me")
     limite = time.time() + 180
     while True:
-        lista = requests.get(f"{base}/api/solicitacoes/matriculas", headers=AUTH, timeout=30).json()
-        nossas = [s for s in lista if s["turma_id"] == turma_id]
+        lista = requests.get(lista_url, headers=AUTH, timeout=30).json()
+        nossas = [s for s in lista if s["id"] in criadas]
         pendentes = sum(s["status"] == "SOLICITADA" for s in nossas)
         if not pendentes or time.time() > limite:
             break
@@ -180,10 +208,12 @@ def conferir_vagas(environment, **_):
     estados = Counter(s["status"] for s in nossas)
     ocupadas = turma["capacidade"] - turma["vagas_disponiveis"]
     resumo = {
-        "carga_id": RUN, "turma_id": turma_id, "capacidade": turma["capacidade"],
+        "carga_id": RUN, "modo": estado["modo"], "turma_id": turma_id, "capacidade": turma["capacidade"],
         "solicitacoes_aceitas": len(estado["solicitacoes"]), "estados": dict(estados),
         "vagas_ocupadas": ocupadas, "pendentes_ao_final": pendentes,
-        "sem_overbooking": estados.get("DEFERIDA", 0) == ocupadas <= turma["capacidade"],
+        "sem_overbooking": (estados.get("DEFERIDA", 0) <= turma["capacidade"]
+                            if estado["modo"] == "aluno" else
+                            estados.get("DEFERIDA", 0) == ocupadas <= turma["capacidade"]),
         "requisicoes": environment.stats.total.num_requests,
         "falhas": environment.stats.total.num_failures,
         "rps_medio": round(environment.stats.total.total_rps, 2),

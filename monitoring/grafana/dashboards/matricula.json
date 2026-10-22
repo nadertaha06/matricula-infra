@@ -1060,13 +1060,13 @@
     },
     {
       "type": "stat",
-      "title": "Consumidores nas filas",
+      "title": "Eventos publicados (1 h)",
       "id": 21,
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "description": "",
+      "description": "Os workers buscam mensagens com basic_get (prefetch 1), por isso o RabbitMQ não lista consumidores.",
       "gridPos": {
         "h": 4,
         "w": 6,
@@ -1080,7 +1080,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rabbitmq_queue_consumers{queue=~\"matriculas.*\"}) or vector(0)",
+          "expr": "sum(increase(mensagens_publicadas_total[1h])) or vector(0)",
           "legendFormat": ""
         }
       ],
@@ -1098,7 +1098,8 @@
                 "value": null
               }
             ]
-          }
+          },
+          "decimals": 0
         },
         "overrides": []
       },
