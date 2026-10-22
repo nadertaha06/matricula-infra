@@ -26,12 +26,29 @@ jobs:
           POSTGRES_PASSWORD: ci
           RABBITMQ_PASSWORD: ci
         run: |
-          mkdir -p runtime
+          mkdir -p runtime "$HOME/.config/matricula"
           touch runtime/disciplinas.env runtime/solicitacoes.env runtime/processamento.env
-          for file in docker-compose.yml compose.https.yml compose.proxy.yml compose.test.yml; do
+          echo 'GF_SECURITY_ADMIN_PASSWORD=ci' > "$HOME/.config/matricula/grafana.env"
+          for file in docker-compose.yml compose.https.yml compose.proxy.yml compose.test.yml compose.monitoring.yml; do
             docker compose -f "$file" config -q
             echo "ok: $file"
           done
+      - name: Validar Prometheus (configuracao e regras de alerta)
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool prom/prometheus:v3.5.0 check config /etc/prometheus/prometheus.yml
+      - name: Validar painel do Grafana
+        run: |
+          python3 - <<'PY'
+          import json
+          d = json.load(open('monitoring/grafana/dashboards/matricula.json'))
+          assert d['uid'] == 'matricula'
+          panels = [p for p in d['panels'] if p['type'] != 'row']
+          for p in panels:
+              assert p['datasource']['uid'] == 'prometheus', p['title']
+              assert p['targets'] and all(t['expr'].strip() for t in p['targets']), p['title']
+          print(f"ok: {len(panels)} paineis")
+          PY
       - name: Testar gateway HTTPS com certificado temporario
         run: bash scripts/test-gateway.sh
 
@@ -77,11 +94,16 @@ jobs:
           done
           curl -fsS --max-time 10 "$base/" | grep -q 'id="root"'
           echo "ok: portal"
+          curl -fsS --max-time 10 "$base/grafana/api/health" >/dev/null
+          echo "ok: Grafana"
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/api/disciplinas/metrics")" = 404
+          echo "ok: metricas internas bloqueadas"
           redirect=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' --max-time 10 "http://$DEPLOY_HOST:8080/health")
           test "$redirect" = "308 $base/health"
           echo "ok: HTTP redireciona para HTTPS"
           {
             echo "### Acesso publico"
             echo "Portal: $base/"
+            echo "Grafana: $base/grafana/"
             echo "Certificado: $(echo | openssl s_client -connect "$DEPLOY_HOST:8080" 2>/dev/null | openssl x509 -noout -enddate)"
           } >> "$GITHUB_STEP_SUMMARY"

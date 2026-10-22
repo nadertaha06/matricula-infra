@@ -1,0 +1,42 @@
+# Coleta pela rede Docker "rede". Nenhum destes alvos e acessivel pela internet.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alertas.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+
+  # Servicos da aplicacao: GET /metrics (bloqueado no gateway publico).
+  - job_name: disciplinas
+    static_configs:
+      - targets: [matricula-disciplinas:8001]
+  - job_name: solicitacoes
+    static_configs:
+      - targets: [matricula-solicitacoes:8002]
+  - job_name: processamento
+    static_configs:
+      - targets: [matricula-processamento:8003]
+
+  # API Gateway (Nginx) via stub_status na porta interna 8081.
+  - job_name: gateway
+    static_configs:
+      - targets: [matricula-nginx-exporter:9113]
+
+  # Plugin rabbitmq_prometheus; per-object traz as metricas de cada fila.
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: [rabbitmq:15692]
+
+  - job_name: postgres
+    static_configs:
+      - targets: [matricula-postgres-exporter:9187]
+
+  - job_name: node
+    static_configs:
+      - targets: [matricula-node-exporter:9100]

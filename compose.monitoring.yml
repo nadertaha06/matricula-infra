@@ -1,0 +1,98 @@
+# Prometheus, Grafana e exporters na rede "rede". Somente o Grafana e publico,
+# pelo gateway em /grafana/ (leitura anonima); o Prometheus fica no loopback da EC2.
+name: matricula-monitoramento
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: matricula-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=400MB
+    ports: ["127.0.0.1:9090:9090"]
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    mem_limit: 320m
+    networks: [rede]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://localhost:9090/-/ready]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    container_name: matricula-grafana
+    restart: unless-stopped
+    # GF_SECURITY_ADMIN_PASSWORD fica neste arquivo privado da EC2 (gerado pelo deploy).
+    env_file: ${HOME}/.config/matricula/grafana.env
+    environment:
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://13.220.42.157:8080/grafana/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_ANONYMOUS_HIDE_VERSION: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/matricula.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_LOG_LEVEL: warn
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    mem_limit: 256m
+    networks: [rede]
+    depends_on:
+      prometheus: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://localhost:3000/api/health]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:1.4.2
+    container_name: matricula-nginx-exporter
+    restart: unless-stopped
+    command: [--nginx.scrape-uri=http://matricula-https:8081/stub_status]
+    mem_limit: 32m
+    networks: [rede]
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    container_name: matricula-postgres-exporter
+    restart: unless-stopped
+    # Credenciais lidas do .env privado da EC2 (o mesmo do docker-compose.yml).
+    environment:
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-postgres}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_USER:-postgres}
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:-}
+    mem_limit: 64m
+    networks: [rede]
+
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: matricula-node-exporter
+    restart: unless-stopped
+    command: [--path.rootfs=/host]
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    mem_limit: 48m
+    networks: [rede]
+
+volumes:
+  prometheus_data:
+  grafana_data:
+networks:
+  rede:
+    external: true

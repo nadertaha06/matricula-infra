@@ -22,6 +22,7 @@ if name == 'docker':
     if args[0] == 'run' and os.environ.get('FAIL_NGINX'): sys.exit(1)
     if args[0] == 'ps' and not os.environ.get('NO_8080'): print('0.0.0.0:8080->8080/tcp')
 if name == 'git' and args[:2] == ['rev-parse', 'HEAD']: print('commit-anterior')
+if name == 'df': print('Avail'); print(os.environ.get('FREE_KB', '5000000'))
 if name == 'curl':
     if '%{http_code}' in args:
         print(os.environ.get('ACME_CODE', '404'), end='')
@@ -30,29 +31,38 @@ if name == 'curl':
     else:
         print('<html><div id="root"></div></html>')
 '''
+REPO_FILES = ('compose.https.yml', 'compose.proxy.yml', 'compose.monitoring.yml', 'tls/default.conf',
+              'proxy/default.conf')
+MONITORING = ['matricula-prometheus', 'matricula-grafana', 'matricula-nginx-exporter',
+              'matricula-postgres-exporter', 'matricula-node-exporter']
 APPS = ['postgres', 'rabbitmq', 'matricula-disciplinas', 'matricula-solicitacoes',
         'matricula-processamento', 'matricula-frontend']
 
 
 class DeployTests(unittest.TestCase):
-    def run_deploy(self, **flags):
+    def run_deploy(self, files=REPO_FILES, grafana_env=None, **flags):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ('docker', 'git', 'curl', 'sudo', 'flock', 'sleep'):
+            for name in ('docker', 'git', 'curl', 'sudo', 'flock', 'sleep', 'df'):
                 path = root / name
                 path.write_text(FAKE)
                 path.chmod(0o755)
             repo = root / 'repo'
             (repo / 'tls').mkdir(parents=True)
             (repo / 'proxy').mkdir()
-            for file in ('compose.https.yml', 'compose.proxy.yml', 'tls/default.conf', 'proxy/default.conf'):
+            for file in files:
                 (repo / file).write_text('')
+            secret = root / '.config' / 'matricula' / 'grafana.env'
+            if grafana_env is not None:
+                secret.parent.mkdir(parents=True)
+                secret.write_text(grafana_env)
             env = dict(os.environ, HOME=directory, DEPLOY_TEST_ROOT=directory, INFRA_DIR=str(repo),
                        PATH=directory+os.pathsep+os.environ['PATH'], **flags)
             result = subprocess.run(['bash', str(SCRIPT), 'commit-novo'], env=env,
                                     capture_output=True, text=True, timeout=30)
             calls_file = root / 'calls'
             calls = [json.loads(line) for line in calls_file.read_text().splitlines()] if calls_file.exists() else []
+            self.secret = (secret.read_text(), secret.stat().st_mode & 0o777) if secret.exists() else None
             return result, calls
 
     @staticmethod
@@ -116,6 +126,46 @@ class DeployTests(unittest.TestCase):
         result, calls = self.run_deploy(ACME_CODE='308')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(['git', 'reset', '-q', '--hard', 'commit-anterior'], calls)
+
+    def test_monitoring_stack_is_started_and_prometheus_reloaded_before_gateway(self):
+        result, calls = self.run_deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        monitoring = calls.index(['docker', 'compose', '-f', 'compose.monitoring.yml', 'up', '-d', '--wait'])
+        gateway = calls.index(['docker', 'compose', '-f', 'compose.https.yml', 'up', '-d', '--wait'])
+        self.assertLess(monitoring, gateway)
+        self.assertIn(['docker', 'kill', '-s', 'HUP', 'matricula-prometheus'], calls)
+        urls = {c[-1] for c in calls if c[0] == 'curl'}
+        self.assertIn('https://127.0.0.1:8080/grafana/api/health', urls)
+        self.assertIn('http://127.0.0.1:9090/-/ready', urls)
+        self.assertIn('https://127.0.0.1:8080/api/disciplinas/metrics', urls)
+
+    def test_grafana_password_is_generated_once_with_private_permissions(self):
+        self.run_deploy()
+        content, mode = self.secret
+        self.assertRegex(content, r'^GF_SECURITY_ADMIN_PASSWORD=[0-9a-f]{48}\n$')
+        self.assertEqual(mode, 0o600)
+        self.run_deploy(grafana_env='GF_SECURITY_ADMIN_PASSWORD=existente\n')
+        self.assertEqual(self.secret[0], 'GF_SECURITY_ADMIN_PASSWORD=existente\n')
+
+    def test_low_disk_aborts_before_any_change(self):
+        result, calls = self.run_deploy(FREE_KB='1000')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Espaco livre insuficiente', result.stderr)
+        self.assertFalse(any(c[0] in ('git', 'sudo') for c in calls))
+        self.assertFalse(any(c[:2] == ['docker', 'compose'] for c in calls))
+
+    def test_rollback_removes_monitoring_when_previous_version_had_none(self):
+        files = tuple(f for f in REPO_FILES if f != 'compose.monitoring.yml')
+        result, calls = self.run_deploy(files=files, FAIL_HEALTH='1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(['docker', 'rm', '-f', *MONITORING], calls)
+
+    def test_rollback_restarts_previous_monitoring_when_it_existed(self):
+        result, calls = self.run_deploy(FAIL_HEALTH='1')
+        self.assertNotEqual(result.returncode, 0)
+        ups = [c for c in calls if c == ['docker', 'compose', '-f', 'compose.monitoring.yml', 'up', '-d', '--wait']]
+        self.assertEqual(len(ups), 2)
+        self.assertNotIn(['docker', 'rm', '-f', *MONITORING], calls)
 
 
 if __name__ == '__main__':

@@ -13,3 +13,4 @@ reports/
 runtime/
 __pycache__/
 .pytest_cache/
+loadtest/resultados/

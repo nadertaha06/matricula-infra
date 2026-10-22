@@ -1,0 +1,70 @@
+groups:
+  - name: matricula
+    rules:
+      - alert: AlvoIndisponivel
+        expr: up == 0
+        for: 1m
+        labels:
+          severidade: critica
+        annotations:
+          resumo: "{{ $labels.job }} nao responde a coleta do Prometheus"
+
+      - alert: TaxaDeErro5xxAlta
+        expr: |
+          sum by (job) (rate(http_requests_total{status=~"5.."}[5m]))
+            / sum by (job) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "{{ $labels.job }} com mais de 5% de respostas 5xx"
+
+      - alert: LatenciaP95Alta
+        expr: |
+          histogram_quantile(0.95,
+            sum by (job, le) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "p95 de {{ $labels.job }} acima de 1 s"
+
+      - alert: MensagensNaDLQ
+        expr: sum(rabbitmq_queue_messages{queue="matriculas.dlq"}) > 0
+        for: 1m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Mensagens na matriculas.dlq exigem inspecao e republicacao"
+
+      - alert: FilaAcumulando
+        expr: max by (queue) (rabbitmq_queue_messages_ready{queue=~"matriculas\\.(solicitacoes|processamento)"}) > 50
+        for: 5m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "Fila {{ $labels.queue }} acumulando mensagens"
+
+      - alert: WorkerDesconectado
+        expr: worker_conectado == 0
+        for: 2m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Worker de {{ $labels.job }} sem conexao com o RabbitMQ"
+
+      - alert: DiscoQuaseCheio
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.10
+        for: 10m
+        labels:
+          severidade: critica
+        annotations:
+          resumo: "Menos de 10% de disco livre na EC2 (PostgreSQL e RabbitMQ em risco)"
+
+      - alert: MemoriaBaixa
+        expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+        for: 5m
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Menos de 10% de memoria disponivel na EC2"
